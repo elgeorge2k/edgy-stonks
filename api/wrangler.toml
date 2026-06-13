@@ -1,0 +1,22 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "edgy-stonks-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "edgy_stonks_db"
+database_id = "LOCAL_DEVELOPMENT_PLACEHOLDER"
+
+[vars]
+ENVIRONMENT = "development"
+
+[env.production]
+vars = { ENVIRONMENT = "production" }
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "edgy_stonks_db"
+database_id = "TU_DATABASE_ID_REAL_DE_CLOUDFLARE"

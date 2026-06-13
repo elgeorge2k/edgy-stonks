@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Cloudflare Wrangler local state (Local D1 SQLite, KV caches, etc.)
+.wrangler/
+
+# Build outputs
+dist/
+
+# Environment variables & secrets (just in case)
+.env
+.env.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
