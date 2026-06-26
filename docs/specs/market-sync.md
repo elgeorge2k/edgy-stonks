@@ -36,9 +36,10 @@ The Angular client controls how often it requests market data:
 5. If the provider rate limit is reached or the provider is unavailable, the Worker returns the last cached price with `X-Cache-Status: Hydrating` and marks response metadata as delayed or cached rather than realtime.
 6. If no cached asset data exists, the Worker returns a cache-miss response and schedules hydration asynchronously.
 
-The hydration task must use `ctx.waitUntil()` and must not block the HTTP response:
+The hydration task is scheduled and processed through the centralized opportunistic background queue processor (`processOpportunisticQueue(env, ctx)`) without blocking the HTTP response:
 
 ```ts
+// Enqueued and run asynchronously in the background queue processor
 ctx.waitUntil(
   fetch(MARKET_DATA_PROVIDER_URL)
     .then((response) => response.json())

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "indexing": {
+    "provider": "ollama",
+    "model": "embeddinggemma:latest",
+    "embeddingBatchSize": 5,
+    "searchMaxResults": 10,
+    "timeout": 60,
+    "baseURL": "http://localhost:11434",
+    "enabled": true,
+    "dimension": 768
+  }
+}

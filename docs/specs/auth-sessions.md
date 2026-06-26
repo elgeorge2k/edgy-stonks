@@ -43,9 +43,10 @@ Logout remains safe to retry.
 
 No persistent background worker, cron job, or idle maintenance process is permitted.
 
-Cleanup may run only as bounded request-time maintenance after the client receives the response:
+Cleanup runs opportunistically as part of the centralized background queue processor (`processOpportunisticQueue(env, ctx)`) triggered via `ctx.waitUntil()` on every request:
 
 ```ts
+// Executed as a step in the background queue processor
 ctx.waitUntil(
   env.DB.prepare(
     "DELETE FROM revoked_tokens WHERE expires_at < strftime('%s', 'now') LIMIT 50"
@@ -53,4 +54,4 @@ ctx.waitUntil(
 );
 ```
 
-The cleanup operation must be capped so it completes within the request lifecycle and does not create idle cost.
+The cleanup operation is strictly capped so it completes quickly within the request-time background budget and does not create idle cost.

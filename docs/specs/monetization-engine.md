@@ -73,12 +73,43 @@ The RPC provider is intentionally abstracted. Documentation must not hardcode or
 
 ## 6. Asset Pricing, Deposit, and Withdrawal Settlement Mechanics
 
-- Internal virtual currency values, asset exposures, and user balances are accounted for through the dual-ledger model.
-- mETH is the only withdrawable ledger.
-- Deposits fund mETH operations by sending physical ETH to the platform's Base L2 liquidity address.
-- Credit cards, bank transfers, and traditional payment gateways are unsupported.
-- Withdrawals audit the internal mETH ledger, convert approved mETH back to physical ETH at `1000 mETH = 1 ETH`, subtract the configured withdrawal fee, and send the result to the user's verified Base L2 wallet address.
-- Outbound settlements are dispatched only to verified user-controlled Base L2 wallet addresses. Users are responsible for providing accurate and compatible wallet addresses.
+All deposits and withdrawals are processed asynchronously through the state machine.
+
+### 6.1 Precision and Conversion Mapping (Wei to mETH Cents)
+
+To enforce ledger consistency and avoid arbitrary precision float issues:
+- **1 mETH = 0.001 ETH = 10^15 Wei**.
+- The database tracks mETH balance in integer cents (`meth_balance_cents`).
+- **1 mETH cent = 0.01 mETH = 10^13 Wei** (10,000 Gwei).
+- Downstream conversions must apply floor-truncation to drop fractional Wei/cents at the boundary.
+
+### 6.2 Deposits Flow (Inbound verification)
+
+1. **Intention (POST):** The user provides an L2 transaction hash `tx_hash`. The system creates a `crypto_transactions` entry with status `NEW`. Returns HTTP `202 Accepted`.
+2. **Transition (PUT):** Transitions the status to `PENDING` (HTTP `202 Accepted`), adding it to the opportunistic queue.
+3. **Queue Processing (Background):**
+   - The background queue processor queries `PENDING` deposits.
+   - It runs `publicClient.getTransactionReceipt({ hash: tx_hash })` via `viem`.
+   - **Verification Checks:**
+     1. Confirms the transaction status is `success`.
+     2. Confirms the destination address matches the platform's configured core liquidity address.
+     3. Confirms the sender wallet address matches the user's registered wallet address.
+     4. Audits against double-claims by asserting `tx_hash` is unique and does not already exist with `CONFIRMED` status.
+   - Upon verification success:
+     - Converts Wei received to mETH cents: `meth_cents = floor(wei_value / 10^13)`.
+     - Credits the user's `meth_balance_cents` in `users`.
+     - Updates the transaction row to `status = 'CONFIRMED'`.
+
+### 6.3 Withdrawals Flow (Outbound dispatch)
+
+1. **Intention (POST):** The user initiates a withdrawal request. The system verifies that the user's `meth_balance_cents` is sufficient. Deducts the amount immediately to prevent double-spending, creating a `crypto_transactions` entry with status `NEW`.
+2. **Transition (PUT):** Transitions status to `PENDING` and specifies destination address/amount (HTTP `202 Accepted`), adding it to the opportunistic queue.
+3. **Queue Processing (Background):**
+   - The background queue processor queries `PENDING` withdrawals.
+   - It deducts the configured fixed withdrawal fee (e.g., 2.5%), converts the net mETH cents back to Wei (`wei_to_send = net_cents * 10^13`), and prepares the transfer.
+   - It signs and broadcasts the transaction to Base L2 using `viem` and `BASE_VAULT_PRIVATE_KEY` secrets.
+   - Sets the database transaction row status to `PENDING` or `CONFIRMED` depending on the broadcast receipt.
+   - On broadcast failure, the queue processor logs the failure, increments the retry attempt counter, and updates the `error_message` for diagnostic visibility. On terminal failure, it refunds the escrowed balance back to the user's profile.
 
 ---
 

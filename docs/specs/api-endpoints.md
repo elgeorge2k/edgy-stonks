@@ -4,12 +4,14 @@ The platform enforces a lean REST contract between the Angular frontend and the 
 
 ---
 
-## 1. Idempotent Unified Endpoint Catalog
+## 1. Idempotent State-Machine Endpoint Catalog
 
-Every mutation flow for bets, deposits, and withdrawals follows a 2-step idempotent execution pattern:
+To satisfy edge runtime constraints (such as the 50ms CPU limit) and ensure immediate client responsiveness, mutations follow a non-blocking **Opportunistic Event-Driven State Machine** pattern:
 
-1. **POST:** Step 1 launches intention, reserves context, checks baseline rules, generates a tracking ID, and sets state to `NEW`.
-2. **PUT:** Step 2 locks execution, idempotently processes the action, mutates state to `COMPLETED` or `FAILED`, and commits to the ledger. Payload-less retries with the same ID return the same cached HTTP response without duplicate execution.
+1. **POST (Intention):** Step 1 initiates the workflow, validates basic parameters, deducts preliminary balances, and inserts a `NEW` or `PENDING` state row in D1. Returns an immediate HTTP `202 Accepted` response with the generated tracking ID.
+2. **PUT (Trigger / Transition):** Step 2 transitions state tags to notify the background queue processor that the item is ready for action. It does not perform heavy calculations or external calls synchronously.
+3. **Background Processing:** In the background, an opportunistic queue processor triggered on every request via `ctx.waitUntil()` processes pending records (performing `viem` smart contract verification, pricing checks, ADL calculation, etc.) and updates the records to `COMPLETED` or `FAILED`.
+4. **Client Polling:** The frontend client polls the record's state using GET requests until status moves to `COMPLETED` or `FAILED`.
 
 | Method | Endpoint | Payload / Query Params | Description |
 | :--- | :--- | :--- | :--- |
@@ -17,15 +19,15 @@ Every mutation flow for bets, deposits, and withdrawals follows a 2-step idempot
 | **GET** | `/api/v1/assets/:ticker/history` | `?range=30d` | Retrieves historical OHLC data to fuel charts. |
 | **GET** | `/api/v1/portfolios` | None, inferred from JWT context | Retrieves active open positions for the authenticated user. |
 | **GET** | `/api/v1/bets` | `?status=COMPLETED&resolution_status=CASHED_OUT&limit=20` | Retrieves the user's resolved or liquidated bet history. |
-| **POST** | `/api/v1/bets` | `{ ticker: "NVDA", bet_type: "LONG", collateral_amount_cents: 5000, balance_type: "METH" }` | Step 1 creates a bet intention, generates `bet_id`, applies exposure checks, and sets status to `NEW`. |
-| **PUT** | `/api/v1/bets/:id` | None | Step 2 locks the execution price, confirms the bet, moves it to the active portfolio, and sets status to `COMPLETED`. |
-| **POST** | `/api/v1/bets/:id/cashout` | None | Initiates manual closeout intention and sets cashout intent state to `NEW`. |
-| **PUT** | `/api/v1/bets/:id/cashout` | None | Finalizes cashout, calculates final multipliers, credits the user balance, sets status to `COMPLETED`, and sets `resolution_status` to `CASHED_OUT`. |
+| **POST** | `/api/v1/bets` | `{ ticker: "NVDA", bet_type: "LONG", collateral_amount_cents: 5000, balance_type: "METH" }` | Step 1: Creates a bet intention with status `NEW`, executes validation, and returns HTTP 202. |
+| **PUT** | `/api/v1/bets/:id` | None | Step 2: Confirms the bet, transitions status to `PENDING` to queue it for the background processor, and returns HTTP 202. |
+| **POST** | `/api/v1/bets/:id/cashout` | None | Initiates manual closeout intention and sets cashout status to `NEW` (HTTP 202). |
+| **PUT** | `/api/v1/bets/:id/cashout` | None | Transitions closeout status to `PENDING` to queue it for the background processor (HTTP 202). |
 | **GET** | `/api/v1/wallet/transactions` | `?limit=10` | Retrieves the ledger history of crypto deposits and withdrawals. |
-| **POST** | `/api/v1/wallet/deposit` | `{ tx_hash: "0x..." }` | Step 1 initiates inbound transaction verification from Base L2 and sets status to `NEW`. |
-| **PUT** | `/api/v1/wallet/deposit/:id` | None | Step 2 validates on-chain confirmation, mints mETH to the user profile, and sets status to `COMPLETED`. |
-| **POST** | `/api/v1/wallet/withdraw` | None | Step 1 initiates withdrawal intention and validates that the user has enough mETH balance. |
-| **PUT** | `/api/v1/wallet/withdraw/:id` | `{ amount_cents: 100000, address: "0x..." }` | Step 2 locks the requested amount, signs the transaction through `viem`, broadcasts to Base L2, and sets status to `COMPLETED`. |
+| **POST** | `/api/v1/wallet/deposit` | `{ tx_hash: "0x..." }` | Step 1: Initiates inbound transaction tracking and sets status to `NEW` (HTTP 202). |
+| **PUT** | `/api/v1/wallet/deposit/:id` | None | Step 2: Transitions status to `PENDING` to queue on-chain confirmation checks for the background processor (HTTP 202). |
+| **POST** | `/api/v1/wallet/withdraw` | None | Step 1: Initiates withdrawal intention, verifies mETH balances, and sets status to `NEW` (HTTP 202). |
+| **PUT** | `/api/v1/wallet/withdraw/:id` | `{ amount_cents: 100000, address: "0x..." }` | Step 2: Locks the requested amount and transitions status to `PENDING` to queue the transaction signing/broadcasting for the background processor (HTTP 202). |
 | **GET** | `/api/v1/auth/login` | `?provider=google` | Redirects the user to the selected OAuth2 identity provider. |
 | **GET** | `/api/v1/auth/callback` | `?code=xyz&state=abc` | Exchanges the OAuth authorization code, registers or logs in the user, and issues the application JWT. |
 | **POST** | `/api/v1/auth/logout` | None, inferred from JWT context | Adds the incoming JWT signature to the `revoked_tokens` table and clears client-side token state. |

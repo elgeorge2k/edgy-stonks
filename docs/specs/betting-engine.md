@@ -35,47 +35,58 @@ A position is liquidated when the asset moves against the player past the liquid
 
 For `L = 50`, if the real stock moves `2%` or more in the wrong direction, the position value is wiped out.
 
-## 3. Execution Mechanics
+## 3. Execution Mechanics & State-Machine Delegation
+
+Because the platform uses an **Opportunistic Event-Driven Architecture**, heavy execution tasks (such as pricing lookups, exposure checks, leverage multipliers, portfolio insertions, and payouts) are processed asynchronously in the background.
 
 ### 3.1 Step 1 — Intention
 
-`POST /api/v1/bets` performs the following domain checks before persistence:
+`POST /api/v1/bets` performs the following fast domain checks synchronously:
 
 1. Validates the selected ledger: `VIRTUAL` or `METH`.
 2. Validates the selected ticker and bet direction.
 3. Checks global exposure caps for ticker and direction.
 4. Calculates the current payout ratio string.
-5. Deducts `collateral_amount_cents` from the selected user ledger.
+5. Deducts `collateral_amount_cents` from the selected user ledger in `users` (held in escrow).
 6. Creates a row in `bets` with `status = 'NEW'`.
 
-The response includes:
-
+The HTTP response returns `202 Accepted` immediately with:
 - `bet_id`
 - `payout_ratio_string`
-- exposure and liquidity metadata required by the frontend before final confirmation.
+- Exposure and liquidity metadata.
 
-### 3.2 Step 2 — Lock & Execution
+### 3.2 Step 2 — Lock & Queue Admission
 
-`PUT /api/v1/bets/:id` validates that the transaction has not already been processed. It then:
+`PUT /api/v1/bets/:id` confirms the bet is ready to execute:
 
-1. Locks the live asset price from `assets`.
-2. Updates the `bets` row to `status = 'COMPLETED'`.
-3. Populates `buy_price`.
-4. Inserts the active position into `portfolios`.
+1. Validates that the bet has a status of `NEW` and has not been processed.
+2. Transitions the bet's status in D1 to `PENDING`.
+3. Returns an immediate HTTP `202 Accepted` response.
 
-The `portfolios` table remains untouched until Step 2 completes.
+*Background Queue Execution:*
+When the opportunistic background processor wakes up:
+1. It queries `bets` where `status = 'PENDING'` and `resolved_at IS NULL` (indicating an active position entry task).
+2. It locks the current live price from `assets`.
+3. It calculates `shares_quantity` using the approved formula: `shares_quantity = (collateral_amount_cents * 50) / buy_price`.
+4. It updates the `bets` row status to `COMPLETED` and populates `buy_price`.
+5. It inserts the active position into `portfolios`.
+
+The client polls the bet state via GET requests until the status becomes `COMPLETED` and the active position appears in the client's portfolio.
 
 ## 4. Resolution Workflow
 
-1. The user requests to cash out or close an active position through `POST /api/v1/bets/:id/cashout` followed by `PUT /api/v1/bets/:id/cashout`.
-2. The Worker reads the latest cached `current_price` from `assets`.
-3. The domain engine computes asset variance, final multiplier, payout, fees, and any ADL adjustment.
-4. The atomic database transaction:
-   - Credits `payout_amount_cents` back to the user's corresponding profile balance in `users`.
-   - Updates `settlement_price`, `final_multiplier`, `payout_amount_cents`, and `resolved_at` on the `bets` row.
-   - Sets `status = 'COMPLETED'`.
-   - Sets `resolution_status = 'CASHED_OUT'`.
-   - Deletes the active tracking position from `portfolios`.
+1. The user requests to cash out or close an active position.
+2. `POST /api/v1/bets/:id/cashout` registers the intent, ensuring the position is active, and sets closeout state in D1.
+3. `PUT /api/v1/bets/:id/cashout` transitions the closeout status to `PENDING` in D1 and returns HTTP `202 Accepted` immediately.
+4. *Background Queue Execution:*
+   - The opportunistic background task detects the pending cashout request.
+   - It reads the latest cached `current_price` from `assets`.
+   - The domain engine computes asset variance, final multiplier, payout, fees, and any ADL adjustment.
+   - It executes an atomic database transaction:
+     - Credits `payout_amount_cents` back to the user's corresponding profile balance in `users`.
+     - Updates `settlement_price`, `final_multiplier`, `payout_amount_cents`, and `resolved_at` on the `bets` row.
+     - Sets the bet's status to `COMPLETED` and `resolution_status = 'CASHED_OUT'`.
+     - Deletes the active tracking position from `portfolios`.
 5. Floating-point operations enforce safe checks to prevent division-by-zero errors from downstream pricing anomalies.
 
 ## 5. Pool Solvency & Risk Mitigation

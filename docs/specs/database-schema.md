@@ -98,13 +98,18 @@ CREATE TABLE bets (
     settlement_price REAL,
     final_multiplier REAL,
     payout_amount_cents INTEGER,
-    status TEXT NOT NULL CHECK (status IN ('NEW', 'COMPLETED', 'FAILED')),
+    status TEXT NOT NULL CHECK (status IN ('NEW', 'PENDING', 'COMPLETED', 'FAILED')),
     resolution_status TEXT CHECK (resolution_status IN ('CASHED_OUT', 'LIQUIDATED')),
     opened_at INTEGER NOT NULL,
     resolved_at INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
     FOREIGN KEY (ticker) REFERENCES assets(ticker) ON DELETE RESTRICT
 );
+
+CREATE INDEX idx_bets_status ON bets(status);
+CREATE INDEX idx_bets_user_status ON bets(user_id, status);
 ```
 
 ### 2.6 Revoked Tokens Table
@@ -118,6 +123,8 @@ CREATE TABLE revoked_tokens (
     expires_at INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE INDEX idx_revoked_tokens_user_expires ON revoked_tokens(user_id, expires_at);
 ```
 
 ### 2.7 Crypto Transactions Table
@@ -134,8 +141,12 @@ CREATE TABLE crypto_transactions (
     tx_hash TEXT UNIQUE,
     status TEXT NOT NULL CHECK (status IN ('NEW', 'PENDING', 'CONFIRMED', 'FAILED')),
     fee_charged_cents INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
+
+CREATE INDEX idx_crypto_transactions_status ON crypto_transactions(status);
 ```
