@@ -150,3 +150,29 @@ CREATE TABLE crypto_transactions (
 
 CREATE INDEX idx_crypto_transactions_status ON crypto_transactions(status);
 ```
+
+### 2.8 Opportunistic Background Queue Table
+
+Acts as the local event-driven state machine to process heavy tasks (like viem RPC calls or ADL math) asynchronously via ctx.waitUntil().
+
+
+```sql
+CREATE TABLE background_tasks (
+    id TEXT PRIMARY KEY, 
+    handler_id TEXT NOT NULL, -- Logical identifier mapped via a Registry Patterns in TS (e.g., 'evaluate_bet')
+    payload TEXT NOT NULL, -- JSON stringified payload with necessary context
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN (
+        'PENDING', 
+        'PROCESSING', 
+        'COMPLETED', 
+        'FAILED'
+    )),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index to quickly fetch the next available tasks without scanning dead rows
+CREATE INDEX idx_background_tasks_queue ON background_tasks(status, created_at);
+```

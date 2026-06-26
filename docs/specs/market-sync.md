@@ -36,16 +36,15 @@ The Angular client controls how often it requests market data:
 5. If the provider rate limit is reached or the provider is unavailable, the Worker returns the last cached price with `X-Cache-Status: Hydrating` and marks response metadata as delayed or cached rather than realtime.
 6. If no cached asset data exists, the Worker returns a cache-miss response and schedules hydration asynchronously.
 
-The hydration task is scheduled and processed through the centralized opportunistic background queue processor (`processOpportunisticQueue(env, ctx)`) without blocking the HTTP response:
+The hydration task bypasses the database task queue completely since market data is ephemeral and non-transactional. Instead, it executes as a lightweight, in-memory asynchronous background operation handled natively by the Cloudflare Workers runtime without blocking the synchronous HTTP response path:
 
 ```ts
-// Enqueued and run asynchronously in the background queue processor
+// Triggered opportunistically in memory via the runtime context
 ctx.waitUntil(
   fetch(MARKET_DATA_PROVIDER_URL)
     .then((response) => response.json())
     .then((data) => hydrateD1Assets(data))
 );
-```
 
 ## 5. Response Contract
 
